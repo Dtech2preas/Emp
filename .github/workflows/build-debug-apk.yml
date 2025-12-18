@@ -1,10 +1,14 @@
 name: Build Debug APK
 
 on:
+  # Trigger on push to ANY branch
   push:
-    branches: [ "main", "master" ]
+    branches: [ "**" ]
+  # Trigger on PRs targeting ANY branch
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "**" ]
+  # Bonus: Allows you to manually trigger the build from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: set up JDK 17
-      uses: actions/setup-java@v3
+      uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
@@ -28,7 +32,7 @@ jobs:
       run: ./gradlew assembleDebug --stacktrace
 
     - name: Upload APK
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: debug-apk
         path: app/build/outputs/apk/debug/*.apk
