@@ -1,13 +1,11 @@
 name: Build Debug APK
 
 on:
-  # Trigger on push to ANY branch
+  # Trigger only on the specific branch from your screenshot
   push:
-    branches: [ "**" ]
-  # Trigger on PRs targeting ANY branch
+    branches: [ "apkinspector-init-14674820147306739622" ]
   pull_request:
-    branches: [ "**" ]
-  # Bonus: Allows you to manually trigger the build from the Actions tab
+    branches: [ "apkinspector-init-14674820147306739622" ]
   workflow_dispatch:
 
 jobs:
@@ -29,7 +27,8 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build with Gradle
-      run: ./gradlew assembleDebug --stacktrace
+      # I added -Xmx2048m here to prevent the "Java heap space" error you saw earlier
+      run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs=-Xmx2048m
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
