@@ -19,8 +19,6 @@ data class AnalysisResult(
 
 class AppAnalyzer {
 
-    private val xmlParser = BinaryXmlParser()
-
     suspend fun analyzeApk(apkFile: File): AnalysisResult = withContext(Dispatchers.Default) {
         val repo = ApkRepository(android.content.ContextWrapper(null)) // Hacky? No, we need context for Repo only for Uri.
         // Actually, Repo uses Context for contentResolver. But here we have a File.
@@ -29,7 +27,7 @@ class AppAnalyzer {
 
         // 1. Get Manifest
         val manifestBytes = getFileContent(apkFile, "AndroidManifest.xml")
-        val manifestXml = if (manifestBytes != null) xmlParser.decode(manifestBytes) else "Manifest missing"
+        val manifestXml = if (manifestBytes != null) BinaryXmlParser(manifestBytes).decode() else "Manifest missing"
 
         // 2. Parse Manifest for Permissions/Package (Simple Regex on the decoded XML for now)
         val permissions = extractPermissions(manifestXml)

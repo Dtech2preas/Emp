@@ -90,7 +90,7 @@ fun FileExplorerScreen(
                                     if (bytes != null) {
                                         val content = when {
                                             node.path.endsWith("AndroidManifest.xml") -> {
-                                                val decoded = BinaryXmlParser().decode(bytes)
+                                                val decoded = BinaryXmlParser(bytes).decode()
                                                 FileContent(node.path, decoded, false)
                                             }
                                             node.path.endsWith(".dex") -> {
