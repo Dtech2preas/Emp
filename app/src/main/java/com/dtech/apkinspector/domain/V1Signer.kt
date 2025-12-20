@@ -178,8 +178,8 @@ class V1Signer {
     }
 
     // ASN.1 Helpers
-    private fun sequence(vararg elements: ByteArray): ByteArray = tag(0x30, join(*elements))
-    private fun set(vararg elements: ByteArray): ByteArray = tag(0x31, join(*elements))
+    private fun sequence(vararg elements: ByteArray): ByteArray = tag(0x30, join(elements.toList()))
+    private fun set(vararg elements: ByteArray): ByteArray = tag(0x31, join(elements.toList()))
     private fun integer(v: Int): ByteArray = integer(v.toBigInteger())
     private fun integer(v: java.math.BigInteger): ByteArray = tag(0x02, v.toByteArray())
     private fun oid(id: String): ByteArray {
@@ -225,7 +225,7 @@ class V1Signer {
         return bos.toByteArray()
     }
 
-    private fun join(vararg arrays: ByteArray): ByteArray {
+    private fun join(arrays: List<ByteArray>): ByteArray {
         val bos = ByteArrayOutputStream()
         arrays.forEach { bos.write(it) }
         return bos.toByteArray()
