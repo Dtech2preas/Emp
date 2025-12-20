@@ -35,6 +35,34 @@ class StructuredParsers {
         return label
     }
 
+    fun getAppIconId(manifestBytes: ByteArray): Int? {
+        val parser = BinaryXmlParser(manifestBytes)
+        var iconId: Int? = null
+        parser.traverse { name, attrs ->
+            if (name == "application") {
+                // "icon" is usually in android namespace.
+                // BinaryXmlParser Attribute 'name' is the local name.
+                val iconAttr = attrs.find { it.name == "icon" }
+                if (iconAttr != null) {
+                    // It should be a reference (type 0x01)
+                    if (iconAttr.type == 0x01) {
+                        iconId = iconAttr.data
+                    }
+                }
+            }
+        }
+        return iconId
+    }
+
+    fun resolveIconPath(arscBytes: ByteArray, iconId: Int): String? {
+        return try {
+            val arsc = ArscEditor(arscBytes)
+            arsc.getResourceString(iconId)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun updateAppLabel(manifestBytes: ByteArray, arscBytes: ByteArray?, newLabel: String): EditResult {
         val parser = BinaryXmlParser(manifestBytes)
         var manifestModified = false
