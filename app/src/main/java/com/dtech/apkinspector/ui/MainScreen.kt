@@ -91,8 +91,11 @@ fun MainScreen(
                         EditorTabs(
                             manifestBytes = state.manifestBytes,
                             arscBytes = state.arscBytes,
+                            fileTree = state.fileTree,
                             onManifestChanged = viewModel::updateManifest,
-                            onArscChanged = viewModel::updateArsc
+                            onArscChanged = viewModel::updateArsc,
+                            onFileUpdate = viewModel::updateFile,
+                            onFileContentRequest = viewModel::getFileContent
                         )
                     } else if (state.error == null) {
                          Text("Manifest not found or failed to load.")

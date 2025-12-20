@@ -25,7 +25,7 @@ object DexAnalyzer {
                     if (entry.name.endsWith(".dex")) {
                         zip.getInputStream(entry).use { input ->
                             val bytes = input.readBytes()
-                            val info = parseDexBasic(bytes)
+                            val info = analyzeDexBytes(bytes)
                             totalClasses += 1 // We aren't parsing class_defs count yet, just file count + basic
                             allStrings.addAll(info.extractedStrings)
                         }
@@ -39,7 +39,7 @@ object DexAnalyzer {
         return DexInfo(totalClasses, allStrings.size, 0, allStrings)
     }
 
-    private fun parseDexBasic(data: ByteArray): DexInfo {
+    fun analyzeDexBytes(data: ByteArray): DexInfo {
         // Basic DEX Header Parser to extract Strings
         // https://source.android.com/devices/tech/dalvik/dex-format
 
