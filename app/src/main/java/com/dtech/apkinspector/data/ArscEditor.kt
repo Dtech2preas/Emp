@@ -98,8 +98,7 @@ class ArscEditor(private val data: ByteArray) {
 
     private fun readString(buffer: ByteBuffer, isUtf8: Boolean): String {
         if (isUtf8) {
-            // Decoding UTF-8 length is complex in AXML (1 or 2 bytes for char len, 1 or 2 bytes for byte len)
-            // Simplified: Skip length bytes
+            // Simplified UTF-8 length decoding
             var len = buffer.get().toInt() and 0xFF
             if ((len and 0x80) != 0) buffer.get() // Skip second byte
 
@@ -142,11 +141,6 @@ class ArscEditor(private val data: ByteArray) {
     // API
 
     fun getResourceString(resId: Int): String? {
-        // resId = 0xPPTTEEEE
-        // We only support Global String lookup if we knew the Entry pointed to a string.
-        // But here we act as the String Pool.
-        // Actually, the caller (StructuredParsers) finds the ID, sees it's a string, and gives us the index?
-        // Or we resolve the ID to a value.
         val value = resolveResourceValue(resId) ?: return null
         if (value.dataType == 0x03) { // TYPE_STRING
             if (value.data in globalStrings.indices) {
@@ -165,12 +159,10 @@ class ArscEditor(private val data: ByteArray) {
 
     fun getColors(): Map<String, Int> {
         val colors = mutableMapOf<String, Int>()
-        // Iterate all packages, types, entries
         packageChunks.forEachIndexed { pkgIdx, chunk ->
             val keys = packageKeyPools[pkgIdx] ?: return@forEachIndexed
             val buffer = ByteBuffer.wrap(chunk).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Scan for Type Chunks (0x0201)
             var pos = buffer.getShort(2).toInt() // header size of package
             while (pos < chunk.size) {
                 buffer.position(pos)
@@ -179,7 +171,6 @@ class ArscEditor(private val data: ByteArray) {
                 val size = buffer.getInt()
 
                 if (type == RES_TABLE_TYPE_TYPE) {
-                    // Iterate entries
                     val entryCount = buffer.getInt(pos + 12)
                     val entriesStart = buffer.getInt(pos + 16)
                     val absEntriesStart = pos + entriesStart
@@ -189,15 +180,11 @@ class ArscEditor(private val data: ByteArray) {
                         if (offset != -1) {
                             val entryPos = absEntriesStart + offset
                             buffer.position(entryPos)
-                            // ResTable_entry: size(2), flags(2), key(4)
                             val entrySize = buffer.getShort().toInt()
                             val flags = buffer.getShort().toInt()
                             val keyIdx = buffer.getInt()
 
-                            // Value follows entry. If FLAG_COMPLEX(1), it's a map.
                             if ((flags and 0x01) == 0) {
-                                // Simple value: size(2), res0(1), dataType(1), data(4)
-                                // Standard entry header is 8 bytes. Value is 8 bytes.
                                 val dataType = buffer.get(entryPos + 8 + 3).toInt()
                                 val data = buffer.getInt(entryPos + 8 + 4)
 
@@ -216,7 +203,6 @@ class ArscEditor(private val data: ByteArray) {
     }
 
     fun updateColor(name: String, newColor: Int) {
-        // Find all entries with this name and compatible type, update data
         packageChunks.forEachIndexed { pkgIdx, chunk ->
             val keys = packageKeyPools[pkgIdx] ?: return@forEachIndexed
             val keyIdx = keys.indexOf(name)
@@ -238,18 +224,13 @@ class ArscEditor(private val data: ByteArray) {
                         val offset = buffer.getInt(pos + 20 + i * 4)
                         if (offset != -1) {
                             val entryPos = absEntriesStart + offset
-                            // Check key
                             val entryKey = buffer.getInt(entryPos + 4)
                             if (entryKey == keyIdx) {
-                                // Check flags
                                 val flags = buffer.getShort(entryPos + 2).toInt()
                                 if ((flags and 0x01) == 0) {
-                                    // Check type
                                     val dataType = buffer.get(entryPos + 11).toInt()
                                     if (dataType >= TYPE_INT_COLOR_ARGB8 && dataType <= TYPE_INT_COLOR_RGB4) {
-                                        // Update Data
                                         buffer.putInt(entryPos + 12, newColor)
-                                        // Update Type to ARGB8 if it wasn't
                                         buffer.put(entryPos + 11, TYPE_INT_COLOR_ARGB8.toByte())
                                     }
                                 }
@@ -269,12 +250,10 @@ class ArscEditor(private val data: ByteArray) {
         val typeId = (resId shr 16) and 0xFF
         val entryId = resId and 0xFFFF
 
-        // Find package with id
         packageChunks.forEach { chunk ->
             val buffer = ByteBuffer.wrap(chunk).order(ByteOrder.LITTLE_ENDIAN)
             val id = buffer.getInt(4)
-            if (id == pkgId || pkgId == 127) { // 127 is usually the app package
-                 // Find Type
+            if (id == pkgId || pkgId == 127) {
                  var pos = buffer.getShort(2).toInt()
                  while (pos < chunk.size) {
                      val type = buffer.getShort(pos).toInt() and 0xFFFF
@@ -308,7 +287,6 @@ class ArscEditor(private val data: ByteArray) {
         val output = ByteArrayOutputStream()
 
         // Rebuild Global String Pool
-        // We force UTF-16LE for safety
         val stringBytes = globalStrings.map { it.toByteArray(Charsets.UTF_16LE) }
         val offsets = IntArray(globalStrings.size)
         var currentOffset = 0
@@ -325,7 +303,7 @@ class ArscEditor(private val data: ByteArray) {
         spHeader.putInt(spSize)
         spHeader.putInt(globalStrings.size)
         spHeader.putInt(0)
-        spHeader.putInt(0) // Force UTF-16
+        spHeader.putInt(0)
         spHeader.putInt(28 + (globalStrings.size * 4))
         spHeader.putInt(0)
         for (off in offsets) spHeader.putInt(off)

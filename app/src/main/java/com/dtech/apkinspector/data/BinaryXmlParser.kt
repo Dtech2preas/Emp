@@ -6,17 +6,55 @@ import java.nio.ByteOrder
 
 /**
  * Parses and Edits Android Binary XML (AXML).
- * Supports reading the String Pool, traversing attributes, and rebuilding the file with modified strings.
+ * Supports structural editing (removing permissions) and string modification.
  */
 class BinaryXmlParser(private val data: ByteArray) {
 
     private val CHUNK_STRING_POOL = 0x0001
     private val CHUNK_XML_START_ELEMENT = 0x0102
+    private val CHUNK_XML_END_ELEMENT = 0x0103
 
     // State
     private var strings = mutableListOf<String>()
-    private val otherChunks = mutableListOf<ByteArray>()
+    // We store chunks to allow reordering/removal
+    private val chunks = mutableListOf<Chunk>()
     private var originalHeader: ByteArray = ByteArray(0)
+
+    abstract class Chunk(val type: Int, val headerSize: Int, val totalSize: Int) {
+        abstract fun toBytes(): ByteArray
+    }
+
+    class GenericChunk(type: Int, headerSize: Int, totalSize: Int, val rawData: ByteArray) : Chunk(type, headerSize, totalSize) {
+        override fun toBytes() = rawData
+    }
+
+    class StringPoolChunk(type: Int, headerSize: Int, totalSize: Int, val rawData: ByteArray, val strings: MutableList<String>) : Chunk(type, headerSize, totalSize) {
+        override fun toBytes(): ByteArray {
+            // Rebuild String Pool from mutable strings list
+            // This is complex, so we delegate to the Parser's rebuild logic or implement here.
+            // For simplicity, we will let the Parser.rebuild() handle the String Pool reconstruction centrally
+            // and this chunk acts as a placeholder if we were preserving layout.
+            // But since we modify strings, we always rebuild the pool.
+            return ByteArray(0) // Should be handled by rebuild()
+        }
+    }
+
+    class StartTagChunk(
+        type: Int, headerSize: Int, totalSize: Int,
+        val rawData: ByteArray,
+        val nameIdx: Int,
+        val attrs: List<Attribute>
+    ) : Chunk(type, headerSize, totalSize) {
+        override fun toBytes() = rawData
+    }
+
+    class EndTagChunk(
+        type: Int, headerSize: Int, totalSize: Int,
+        val rawData: ByteArray,
+        val nameIdx: Int
+    ) : Chunk(type, headerSize, totalSize) {
+        override fun toBytes() = rawData
+    }
 
     data class Attribute(val name: String, val value: String?, val type: Int, val data: Int, val nameIdx: Int, val valueIdx: Int)
 
@@ -43,21 +81,60 @@ class BinaryXmlParser(private val data: ByteArray) {
             val chunkHeaderSize = buffer.getShort().toInt() and 0xFFFF
             val chunkTotalSize = buffer.getInt()
 
+            val chunkBytes = ByteArray(chunkTotalSize)
+            buffer.position(chunkStart)
+            buffer.get(chunkBytes)
+
+            // Analyze specific chunks
+            val chunkBuffer = ByteBuffer.wrap(chunkBytes).order(ByteOrder.LITTLE_ENDIAN)
+
             if (chunkType == CHUNK_STRING_POOL) {
-                parseStringPool(buffer, chunkStart, chunkHeaderSize, chunkTotalSize)
+                parseStringPool(chunkBuffer, 0, chunkHeaderSize, chunkTotalSize)
+                chunks.add(StringPoolChunk(chunkType, chunkHeaderSize, chunkTotalSize, chunkBytes, strings))
+            } else if (chunkType == CHUNK_XML_START_ELEMENT) {
+                chunkBuffer.position(8) // Skip header
+                val nsIdx = chunkBuffer.getInt()
+                val nameIdx = chunkBuffer.getInt()
+                val attrStart = chunkBuffer.getShort().toInt() and 0xFFFF
+                val attrSize = chunkBuffer.getShort().toInt() and 0xFFFF
+                val attrCount = chunkBuffer.getShort().toInt() and 0xFFFF
+
+                val attributes = mutableListOf<Attribute>()
+                var attrOffset = attrStart // relative to chunk start? No, relative to chunk start
+                // Actually attrStart is usually 20 bytes (header size).
+
+                for (i in 0 until attrCount) {
+                     chunkBuffer.position(attrOffset)
+                     val aNs = chunkBuffer.getInt()
+                     val aName = chunkBuffer.getInt()
+                     val aVal = chunkBuffer.getInt()
+                     val aTypedValueHeader = chunkBuffer.getInt()
+                     val aData = chunkBuffer.getInt()
+
+                     val aType = (aTypedValueHeader shr 24) and 0xFF
+
+                     val attrName = if (aName >= 0 && aName < strings.size) strings[aName] else ""
+                     val attrValue = if (aVal >= 0 && aVal < strings.size) strings[aVal] else null
+
+                     attributes.add(Attribute(attrName, attrValue, aType, aData, aName, aVal))
+                     attrOffset += attrSize
+                }
+                chunks.add(StartTagChunk(chunkType, chunkHeaderSize, chunkTotalSize, chunkBytes, nameIdx, attributes))
+            } else if (chunkType == CHUNK_XML_END_ELEMENT) {
+                chunkBuffer.position(8)
+                val nsIdx = chunkBuffer.getInt()
+                val nameIdx = chunkBuffer.getInt()
+                chunks.add(EndTagChunk(chunkType, chunkHeaderSize, chunkTotalSize, chunkBytes, nameIdx))
             } else {
-                val chunkBytes = ByteArray(chunkTotalSize)
-                buffer.position(chunkStart)
-                buffer.get(chunkBytes)
-                otherChunks.add(chunkBytes)
+                chunks.add(GenericChunk(chunkType, chunkHeaderSize, chunkTotalSize, chunkBytes))
             }
+
+            buffer.position(chunkStart + chunkTotalSize)
         }
     }
 
     private fun parseStringPool(buffer: ByteBuffer, chunkStart: Int, headerSize: Int, totalSize: Int) {
-        buffer.position(chunkStart)
-        // Skip header part (standard string pool header is 28 bytes)
-        buffer.position(chunkStart + 8)
+        buffer.position(chunkStart + 8) // Skip chunk header
         val stringCount = buffer.getInt()
         val styleCount = buffer.getInt()
         val flags = buffer.getInt()
@@ -72,15 +149,15 @@ class BinaryXmlParser(private val data: ByteArray) {
         val absStringsStart = chunkStart + stringsStart
         for (i in 0 until stringCount) {
             buffer.position(absStringsStart + offsets[i])
-            // Standard AXML string: length (2 bytes), chars (len*2 bytes), null (2 bytes)
             val len = buffer.getShort().toInt() and 0xFFFF
             val charBytes = ByteArray(len * 2)
             buffer.get(charBytes)
             val str = String(charBytes, Charsets.UTF_16LE)
             strings.add(str)
         }
-        buffer.position(chunkStart + totalSize)
     }
+
+    // --- API ---
 
     fun getStrings(): List<String> = strings
 
@@ -90,58 +167,102 @@ class BinaryXmlParser(private val data: ByteArray) {
         }
     }
 
-    fun traverse(onStartElement: (name: String, attrs: List<Attribute>) -> Unit) {
-        val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-        if (buffer.remaining() < 8) return
-        buffer.position(8) // Skip file header
-
-        while (buffer.hasRemaining()) {
-            val chunkStart = buffer.position()
-            if (buffer.remaining() < 8) break
-
-            val chunkType = buffer.getShort().toInt() and 0xFFFF
-            val chunkHeaderSize = buffer.getShort().toInt() and 0xFFFF
-            val size = buffer.getInt()
-
-            if (chunkType == CHUNK_XML_START_ELEMENT) {
-                // Parse attributes
-                buffer.position(chunkStart + 8)
-                val nsIdx = buffer.getInt()
-                val nameIdx = buffer.getInt()
-                val attrStart = buffer.getShort().toInt() and 0xFFFF
-                val attrSize = buffer.getShort().toInt() and 0xFFFF
-                val attrCount = buffer.getShort().toInt() and 0xFFFF
-
-                val tagName = if (nameIdx >= 0 && nameIdx < strings.size) strings[nameIdx] else ""
-                val attributes = mutableListOf<Attribute>()
-
-                var attrOffset = chunkStart + attrStart
-                for (i in 0 until attrCount) {
-                    buffer.position(attrOffset)
-                    val aNs = buffer.getInt()
-                    val aName = buffer.getInt()
-                    val aVal = buffer.getInt()
-                    val aTypedValueHeader = buffer.getInt()
-                    val aData = buffer.getInt()
-
-                    val aType = (aTypedValueHeader shr 24) and 0xFF
-
-                    val attrName = if (aName >= 0 && aName < strings.size) strings[aName] else ""
-                    val attrValue = if (aVal >= 0 && aVal < strings.size) strings[aVal] else null
-
-                    attributes.add(Attribute(attrName, attrValue, aType, aData, aName, aVal))
-                    attrOffset += attrSize
+    fun getPermissions(): List<String> {
+        val perms = mutableListOf<String>()
+        chunks.forEach { chunk ->
+            if (chunk is StartTagChunk) {
+                val tagName = if (chunk.nameIdx in strings.indices) strings[chunk.nameIdx] else ""
+                if (tagName == "uses-permission") {
+                    // Find android:name attribute.
+                    // Attributes store nameIdx.
+                    // To be safe, we check all attributes and look for one with "name"
+                    val nameAttr = chunk.attrs.find {
+                        val aName = if (it.nameIdx in strings.indices) strings[it.nameIdx] else ""
+                        aName == "name"
+                    }
+                    if (nameAttr != null) {
+                         val permValue = nameAttr.value
+                         if (permValue != null) perms.add(permValue)
+                    }
                 }
-                onStartElement(tagName, attributes)
             }
-            buffer.position(chunkStart + size)
         }
+        return perms
+    }
+
+    fun removePermission(permission: String) {
+        val iterator = chunks.iterator()
+        while (iterator.hasNext()) {
+            val chunk = iterator.next()
+            if (chunk is StartTagChunk) {
+                val tagName = if (chunk.nameIdx in strings.indices) strings[chunk.nameIdx] else ""
+                if (tagName == "uses-permission") {
+                    val nameAttr = chunk.attrs.find {
+                        val aName = if (it.nameIdx in strings.indices) strings[it.nameIdx] else ""
+                        aName == "name"
+                    }
+                    if (nameAttr?.value == permission) {
+                        iterator.remove()
+                        // Also remove the next EndTagChunk for this permission
+                        // A uses-permission tag is usually immediately followed by EndTag
+                        // We need to find the matching end tag.
+                        // Since uses-permission is empty, the next chunk should be EndTag
+                        // BUT careful if there are others.
+                        // We will remove the *next* chunk if it is an EndTag with same name.
+                        // However, iterator.next() advances.
+                        // Let's iterate manually or handle it.
+                        // Simplification: We just removed the start tag. We need to remove the end tag.
+                        // Since we are inside iterator, we can't easily peek/remove next without care.
+                        // We'll mark for removal or do a second pass?
+                        // Actually, let's just break and handle removal in a safe way (e.g. collecting indices).
+                    }
+                }
+            }
+        }
+
+        // Proper removal implementation
+        val toRemove = mutableListOf<Chunk>()
+        var foundStart = false
+        var targetNameIdx = -1
+
+        for (chunk in chunks) {
+            if (chunk is StartTagChunk) {
+                val tagName = if (chunk.nameIdx in strings.indices) strings[chunk.nameIdx] else ""
+                if (tagName == "uses-permission") {
+                     val nameAttr = chunk.attrs.find {
+                        val aName = if (it.nameIdx in strings.indices) strings[it.nameIdx] else ""
+                        aName == "name"
+                    }
+                    if (nameAttr?.value == permission) {
+                        toRemove.add(chunk)
+                        foundStart = true
+                        targetNameIdx = chunk.nameIdx
+                    }
+                }
+            } else if (chunk is EndTagChunk && foundStart) {
+                if (chunk.nameIdx == targetNameIdx) {
+                    toRemove.add(chunk)
+                    foundStart = false // Reset
+                }
+            }
+        }
+
+        chunks.removeAll(toRemove)
+    }
+
+    fun traverse(onStartElement: (name: String, attrs: List<Attribute>) -> Unit) {
+         chunks.forEach { chunk ->
+             if (chunk is StartTagChunk) {
+                 val tagName = if (chunk.nameIdx in strings.indices) strings[chunk.nameIdx] else ""
+                 onStartElement(tagName, chunk.attrs)
+             }
+         }
     }
 
     fun rebuild(): ByteArray {
         val output = ByteArrayOutputStream()
 
-        // Rebuild String Pool
+        // 1. Rebuild String Pool
         val stringBytes = strings.map { it.toByteArray(Charsets.UTF_16LE) }
         val offsets = IntArray(strings.size)
         var currentOffset = 0
@@ -150,18 +271,17 @@ class BinaryXmlParser(private val data: ByteArray) {
             currentOffset += 2 + stringBytes[i].size + 2
         }
 
-        // Align strings block
         val stringsBlockPadding = if (currentOffset % 4 != 0) 4 - (currentOffset % 4) else 0
         val stringsBlockSize = currentOffset
 
         val headerSize = 28
         val offsetsSize = strings.size * 4
-        val totalSize = headerSize + offsetsSize + stringsBlockSize + stringsBlockPadding
+        val spTotalSize = headerSize + offsetsSize + stringsBlockSize + stringsBlockPadding
 
         val spHeader = ByteBuffer.allocate(headerSize + offsetsSize).order(ByteOrder.LITTLE_ENDIAN)
         spHeader.putShort(CHUNK_STRING_POOL.toShort())
         spHeader.putShort(28)
-        spHeader.putInt(totalSize)
+        spHeader.putInt(spTotalSize)
         spHeader.putInt(strings.size)
         spHeader.putInt(0) // styles
         spHeader.putInt(0) // flags (UTF-16)
@@ -170,11 +290,9 @@ class BinaryXmlParser(private val data: ByteArray) {
 
         for (off in offsets) spHeader.putInt(off)
 
-        // Buffer for chunks (Header + Strings + OtherChunks)
         val chunksBuffer = ByteArrayOutputStream()
         chunksBuffer.write(spHeader.array())
 
-        // Write strings data
         val strDataBuffer = ByteBuffer.allocate(stringsBlockSize + stringsBlockPadding).order(ByteOrder.LITTLE_ENDIAN)
         for (b in stringBytes) {
             strDataBuffer.putShort((b.size / 2).toShort())
@@ -183,12 +301,24 @@ class BinaryXmlParser(private val data: ByteArray) {
         }
         chunksBuffer.write(strDataBuffer.array())
 
-        // Write other chunks
-        for (c in otherChunks) chunksBuffer.write(c)
+        // 2. Write Other Chunks
+        for (chunk in chunks) {
+            if (chunk is StringPoolChunk) continue // We just wrote the new String Pool
+
+            // Note: StartTagChunk's rawData contains attributes which point to String Pool indices.
+            // If we modified the String Pool order, we would need to update ALL indices in ALL chunks.
+            // BUT: We only MODIFY existing strings in place (via setString). We do NOT add/remove strings,
+            // or if we do, we must update indices.
+            // In this implementation, we assume we only MODIFY strings (same index) or REMOVE chunks.
+            // Removing chunks does not invalidate indices.
+            // So we can reuse rawData for chunks.
+
+            chunksBuffer.write(chunk.toBytes())
+        }
 
         val allChunks = chunksBuffer.toByteArray()
 
-        // Update File Size in Main Header
+        // 3. Main Header
         val fileHeader = ByteBuffer.wrap(originalHeader.copyOf()).order(ByteOrder.LITTLE_ENDIAN)
         fileHeader.putInt(4, 8 + allChunks.size)
 
