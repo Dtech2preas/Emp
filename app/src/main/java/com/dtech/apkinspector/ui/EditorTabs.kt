@@ -10,16 +10,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dtech.apkinspector.domain.StructuredParsers
 import com.dtech.apkinspector.data.BinaryXmlParser
+import com.dtech.apkinspector.data.ApkFileNode
 
 @Composable
 fun EditorTabs(
     manifestBytes: ByteArray?,
     arscBytes: ByteArray?,
+    fileTree: List<ApkFileNode>,
     onManifestChanged: (ByteArray) -> Unit,
-    onArscChanged: (ByteArray) -> Unit
+    onArscChanged: (ByteArray) -> Unit,
+    onFileUpdate: (String, ByteArray) -> Unit,
+    onFileContentRequest: (String) -> ByteArray?
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Identity", "Visuals", "Manifest")
+    val tabs = listOf("Identity", "Visuals", "Manifest", "Files")
     val parser = remember { StructuredParsers() }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -41,6 +45,7 @@ fun EditorTabs(
                     0 -> IdentityTab(parser, manifestBytes, arscBytes, onManifestChanged, onArscChanged)
                     1 -> VisualsTab(parser, arscBytes, onArscChanged)
                     2 -> ManifestPreviewTab(manifestBytes)
+                    3 -> FilesTab(fileTree, onFileContentRequest, onFileUpdate)
                 }
             }
         }
@@ -55,10 +60,6 @@ fun IdentityTab(
     onManifestChanged: (ByteArray) -> Unit,
     onArscChanged: (ByteArray) -> Unit
 ) {
-    // We load initial values
-    // We use a key to reload if bytes change externally (e.g. rebuild?)
-    // Actually we only want to load once or when bytes change.
-
     val currentLabel = remember(manifestBytes, arscBytes) {
         parser.getAppLabel(manifestBytes, arscBytes)
     }
@@ -183,6 +184,13 @@ fun ManifestPreviewTab(manifestBytes: ByteArray) {
 
     Column {
         Text("AndroidManifest.xml Preview", style = MaterialTheme.typography.headlineSmall)
+        if (!parser.isValid) {
+             Text(
+                 "Warning: Manifest parsing reported errors. The preview might be incomplete or raw.",
+                 color = MaterialTheme.colorScheme.error,
+                 style = MaterialTheme.typography.bodySmall
+             )
+        }
         Card(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
             LazyColumn(modifier = Modifier.padding(8.dp)) {
                 item {
