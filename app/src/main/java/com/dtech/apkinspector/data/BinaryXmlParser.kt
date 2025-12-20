@@ -70,14 +70,47 @@ class BinaryXmlParser(private val data: ByteArray) {
         }
 
         val absStringsStart = chunkStart + stringsStart
+        val isUtf8 = (flags and 0x100) != 0
+
         for (i in 0 until stringCount) {
             buffer.position(absStringsStart + offsets[i])
-            // Standard AXML string: length (2 bytes), chars (len*2 bytes), null (2 bytes)
-            val len = buffer.getShort().toInt() and 0xFFFF
-            val charBytes = ByteArray(len * 2)
-            buffer.get(charBytes)
-            val str = String(charBytes, Charsets.UTF_16LE)
-            strings.add(str)
+
+            if (isUtf8) {
+                // Decode UTF-8 Length
+                // 1. Character length
+                var charLen = buffer.get().toInt() and 0xFF
+                if ((charLen and 0x80) != 0) {
+                    buffer.get() // Skip 2nd byte
+                }
+
+                // 2. Byte length
+                var byteLen = buffer.get().toInt() and 0xFF
+                if ((byteLen and 0x80) != 0) {
+                    val next = buffer.get().toInt() and 0xFF
+                    byteLen = ((byteLen and 0x7F) shl 8) or next
+                }
+
+                val charBytes = ByteArray(byteLen)
+                buffer.get(charBytes)
+                val str = String(charBytes, Charsets.UTF_8)
+                strings.add(str)
+                // Note: UTF-8 strings are null-terminated (1 byte 0x00), but we don't need to read it explicitly
+                // as offsets guide the position.
+            } else {
+                // Decode UTF-16 Length
+                // Standard AXML string: length (2 bytes in chars), chars (len*2 bytes), null (2 bytes)
+                var len = buffer.getShort().toInt() and 0xFFFF
+                // Handle large UTF-16 strings
+                if ((len and 0x8000) != 0) {
+                     val low = buffer.getShort().toInt() and 0xFFFF
+                     len = ((len and 0x7FFF) shl 16) or low
+                }
+
+                val charBytes = ByteArray(len * 2)
+                buffer.get(charBytes)
+                val str = String(charBytes, Charsets.UTF_16LE)
+                strings.add(str)
+            }
         }
         buffer.position(chunkStart + totalSize)
     }
@@ -142,11 +175,14 @@ class BinaryXmlParser(private val data: ByteArray) {
         val output = ByteArrayOutputStream()
 
         // Rebuild String Pool
+        // We always rebuild as UTF-16LE for simplicity and max compatibility with our writer logic
         val stringBytes = strings.map { it.toByteArray(Charsets.UTF_16LE) }
         val offsets = IntArray(strings.size)
         var currentOffset = 0
         for (i in strings.indices) {
             offsets[i] = currentOffset
+            // Length (2 bytes) + Data + Null (2 bytes)
+            // Note: We are using simple small-string encoding (len < 32768)
             currentOffset += 2 + stringBytes[i].size + 2
         }
 
@@ -164,7 +200,7 @@ class BinaryXmlParser(private val data: ByteArray) {
         spHeader.putInt(totalSize)
         spHeader.putInt(strings.size)
         spHeader.putInt(0) // styles
-        spHeader.putInt(0) // flags (UTF-16)
+        spHeader.putInt(0) // flags (0 = UTF-16)
         spHeader.putInt(28 + offsetsSize) // strings start
         spHeader.putInt(0) // styles start
 
@@ -177,6 +213,7 @@ class BinaryXmlParser(private val data: ByteArray) {
         // Write strings data
         val strDataBuffer = ByteBuffer.allocate(stringsBlockSize + stringsBlockPadding).order(ByteOrder.LITTLE_ENDIAN)
         for (b in stringBytes) {
+            // Write length (char count = byte count / 2 for UTF-16)
             strDataBuffer.putShort((b.size / 2).toShort())
             strDataBuffer.put(b)
             strDataBuffer.putShort(0)

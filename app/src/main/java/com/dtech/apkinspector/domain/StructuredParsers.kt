@@ -11,112 +11,141 @@ class StructuredParsers {
     )
 
     fun getAppLabel(manifestBytes: ByteArray, arscBytes: ByteArray?): String {
-        val parser = BinaryXmlParser(manifestBytes)
-        var label: String = "Unknown"
+        try {
+            val parser = BinaryXmlParser(manifestBytes)
+            var label: String = "Unknown"
 
-        parser.traverse { name, attrs ->
-            if (name == "application") {
-                val labelAttr = attrs.find { it.name == "label" }
-                if (labelAttr != null) {
-                    if (labelAttr.value != null) {
-                        label = labelAttr.value
-                    } else if (labelAttr.type == 0x01 && arscBytes != null) { // TYPE_REFERENCE
-                        try {
-                            val arsc = ArscEditor(arscBytes)
-                            val resolved = arsc.getResourceString(labelAttr.data)
-                            if (resolved != null) label = resolved
-                        } catch (e: Exception) {
-                            // Ignore arsc errors
+            parser.traverse { name, attrs ->
+                if (name == "application") {
+                    val labelAttr = attrs.find { it.name == "label" }
+                    if (labelAttr != null) {
+                        if (labelAttr.value != null) {
+                            label = labelAttr.value
+                        } else if (labelAttr.type == 0x01 && arscBytes != null) { // TYPE_REFERENCE
+                            try {
+                                val arsc = ArscEditor(arscBytes)
+                                val resolved = arsc.getResourceString(labelAttr.data)
+                                if (resolved != null) label = resolved
+                            } catch (e: Exception) {
+                                // Ignore arsc errors
+                            }
                         }
                     }
                 }
             }
+            return label
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return "Error Parsing Label"
         }
-        return label
     }
 
     fun updateAppLabel(manifestBytes: ByteArray, arscBytes: ByteArray?, newLabel: String): EditResult {
-        val parser = BinaryXmlParser(manifestBytes)
-        var manifestModified = false
-        var arscModified = false
-        var newManifestBytes: ByteArray? = null
-        var newArscBytes: ByteArray? = null
+        try {
+            val parser = BinaryXmlParser(manifestBytes)
+            var manifestModified = false
+            var arscModified = false
+            var newManifestBytes: ByteArray? = null
+            var newArscBytes: ByteArray? = null
 
-        var targetStringIndex = -1
-        var targetResId = -1
+            var targetStringIndex = -1
+            var targetResId = -1
 
-        parser.traverse { name, attrs ->
-             if (name == "application") {
-                 val labelAttr = attrs.find { it.name == "label" }
-                 if (labelAttr != null) {
-                     if (labelAttr.value != null) {
-                         targetStringIndex = labelAttr.valueIdx
-                     } else if (labelAttr.type == 0x01) {
-                         targetResId = labelAttr.data
+            parser.traverse { name, attrs ->
+                 if (name == "application") {
+                     val labelAttr = attrs.find { it.name == "label" }
+                     if (labelAttr != null) {
+                         if (labelAttr.value != null) {
+                             targetStringIndex = labelAttr.valueIdx
+                         } else if (labelAttr.type == 0x01) {
+                             targetResId = labelAttr.data
+                         }
                      }
                  }
-             }
-        }
+            }
 
-        if (targetStringIndex != -1) {
-            parser.setString(targetStringIndex, newLabel)
-            newManifestBytes = parser.rebuild()
-            manifestModified = true
-        } else if (targetResId != -1 && arscBytes != null) {
-            val arsc = ArscEditor(arscBytes)
-            arsc.updateResourceString(targetResId, newLabel)
-            newArscBytes = arsc.rebuild()
-            arscModified = true
-        }
+            if (targetStringIndex != -1) {
+                parser.setString(targetStringIndex, newLabel)
+                newManifestBytes = parser.rebuild()
+                manifestModified = true
+            } else if (targetResId != -1 && arscBytes != null) {
+                val arsc = ArscEditor(arscBytes)
+                arsc.updateResourceString(targetResId, newLabel)
+                newArscBytes = arsc.rebuild()
+                arscModified = true
+            }
 
-        return EditResult(
-            manifest = if (manifestModified) newManifestBytes else null,
-            arsc = if (arscModified) newArscBytes else null
-        )
+            return EditResult(
+                manifest = if (manifestModified) newManifestBytes else null,
+                arsc = if (arscModified) newArscBytes else null
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return EditResult()
+        }
     }
 
     fun getPackageName(manifestBytes: ByteArray): String {
-        val parser = BinaryXmlParser(manifestBytes)
-        var pkg = ""
-        parser.traverse { name, attrs ->
-            if (name == "manifest") {
-                val p = attrs.find { it.name == "package" }
-                if (p?.value != null) {
-                    pkg = p.value
+        try {
+            val parser = BinaryXmlParser(manifestBytes)
+            var pkg = ""
+            parser.traverse { name, attrs ->
+                if (name == "manifest") {
+                    val p = attrs.find { it.name == "package" }
+                    if (p?.value != null) {
+                        pkg = p.value
+                    }
                 }
             }
+            return pkg
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return "Error Parsing Package"
         }
-        return pkg
     }
 
     fun updatePackageName(manifestBytes: ByteArray, newPackageName: String): ByteArray? {
-        val parser = BinaryXmlParser(manifestBytes)
-        var targetIndex = -1
+        try {
+            val parser = BinaryXmlParser(manifestBytes)
+            var targetIndex = -1
 
-        parser.traverse { name, attrs ->
-            if (name == "manifest") {
-                val p = attrs.find { it.name == "package" }
-                if (p?.value != null) {
-                    targetIndex = p.valueIdx
+            parser.traverse { name, attrs ->
+                if (name == "manifest") {
+                    val p = attrs.find { it.name == "package" }
+                    if (p?.value != null) {
+                        targetIndex = p.valueIdx
+                    }
                 }
             }
-        }
 
-        if (targetIndex != -1) {
-            parser.setString(targetIndex, newPackageName)
-            return parser.rebuild()
+            if (targetIndex != -1) {
+                parser.setString(targetIndex, newPackageName)
+                return parser.rebuild()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
         return null
     }
 
     fun getColors(arscBytes: ByteArray): Map<String, Int> {
-        val arsc = ArscEditor(arscBytes)
-        return arsc.getColors()
+        try {
+            val arsc = ArscEditor(arscBytes)
+            return arsc.getColors()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return emptyMap()
+        }
     }
 
     fun updateColor(arscBytes: ByteArray, name: String, newColor: Int): ByteArray {
-        val arsc = ArscEditor(arscBytes)
-        arsc.updateColor(name, newColor)
-        return arsc.rebuild()
+        try {
+            val arsc = ArscEditor(arscBytes)
+            arsc.updateColor(name, newColor)
+            return arsc.rebuild()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return arscBytes // Return original on failure
+        }
     }
 }
