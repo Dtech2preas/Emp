@@ -1,6 +1,8 @@
 package com.dtech.apkinspector.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.*
@@ -49,7 +51,7 @@ fun XmlEditor(initialContent: ByteArray, onSave: (ByteArray) -> Unit) {
                  // Re-decode with potentially updated strings
                  parser.decode()
              }
-             Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+             Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(rememberScrollState())) {
                 Text(decoded, fontFamily = FontFamily.Monospace)
              }
         } else {
