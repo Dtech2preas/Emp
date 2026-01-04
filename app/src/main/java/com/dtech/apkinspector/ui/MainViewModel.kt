@@ -40,8 +40,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val parser = StructuredParsers()
     private val repository = ApkRepository(context)
 
+    fun loadApkFromFile(file: File) {
+        loadApkInternal(file, Uri.fromFile(file))
+    }
+
     fun loadApk(uri: Uri) {
-        _uiState.value = _uiState.value.copy(
+         _uiState.value = _uiState.value.copy(
             isProcessing = true,
             statusMessage = "Loading APK...",
             apkUri = uri,
@@ -61,6 +65,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val file = repository.loadApkFromUri(uri)
                     ?: throw Exception("Failed to load APK from URI")
 
+                loadApkInternal(file, uri)
+            } catch(e: Exception) {
+                 e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        isProcessing = false,
+                        statusMessage = "Error: ${e.message}",
+                        error = e.message
+                    )
+                }
+            }
+        }
+    }
+
+    private fun loadApkInternal(file: File, uri: Uri) {
+        _uiState.value = _uiState.value.copy(
+            isProcessing = true,
+            statusMessage = "Analyzing APK...",
+            apkUri = uri,
+            error = null,
+            manifestBytes = null,
+            arscBytes = null,
+            appLabel = null,
+            packageName = null,
+            fileTree = emptyList(),
+            modifiedFiles = emptyMap(),
+            currentApkFile = null
+        )
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
                 // Read Manifest and ARSC
                 val manifest = repository.getFileContent(file, "AndroidManifest.xml")
                 val arsc = repository.getFileContent(file, "resources.arsc")
