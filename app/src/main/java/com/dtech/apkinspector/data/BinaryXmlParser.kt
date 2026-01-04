@@ -1,23 +1,25 @@
 package com.dtech.apkinspector.data
 
+/**
+ * A lightweight helper to decode Binary XML.
+ * Note: A full encoder is complex. We will stick to the existing "Edit Strings" capability for deep edits,
+ * but this file provides the parsing logic used elsewhere.
+ * For full AXML editing, we would typically use a library like AXMLPrinter2 + Encoder, but for this single-file
+ * offline constraint (which we are now moving past, but still want code simplicity), we keep the custom parser
+ * but expose the "Strings" for editing which is 90% of use cases.
+ */
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * Parses and Edits Android Binary XML (AXML).
- * Supports reading the String Pool, traversing attributes, and rebuilding the file with modified strings.
- */
 class BinaryXmlParser(private val data: ByteArray) {
 
     private val CHUNK_STRING_POOL = 0x0001
     private val CHUNK_XML_START_ELEMENT = 0x0102
 
-    // Flag to indicate if parsing was successful
     var isValid: Boolean = false
         private set
 
-    // State
     private var strings = mutableListOf<String>()
     private val otherChunks = mutableListOf<ByteArray>()
     private var originalHeader: ByteArray = ByteArray(0)
@@ -30,7 +32,6 @@ class BinaryXmlParser(private val data: ByteArray) {
             isValid = true
         } catch (e: Exception) {
             e.printStackTrace()
-            // Ensure state is clean if failed
             strings.clear()
             otherChunks.clear()
             isValid = false
@@ -39,8 +40,6 @@ class BinaryXmlParser(private val data: ByteArray) {
 
     private fun parse() {
         val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-
-        // Read AXML Header
         if (buffer.remaining() < 8) return
         val type = buffer.getShort()
         val headerSize = buffer.getShort()
@@ -56,11 +55,7 @@ class BinaryXmlParser(private val data: ByteArray) {
             val chunkHeaderSize = buffer.getShort().toInt() and 0xFFFF
             val chunkTotalSize = buffer.getInt()
 
-            // Bounds check
-            if (chunkTotalSize < 8 || chunkTotalSize > buffer.remaining() + 8) {
-                // Invalid chunk size, stop parsing to prevent crash
-                break
-            }
+            if (chunkTotalSize < 8 || chunkTotalSize > buffer.remaining() + 8) break
 
             if (chunkType == CHUNK_STRING_POOL) {
                 parseStringPool(buffer, chunkStart, chunkHeaderSize, chunkTotalSize)
@@ -70,14 +65,12 @@ class BinaryXmlParser(private val data: ByteArray) {
                 buffer.get(chunkBytes)
                 otherChunks.add(chunkBytes)
             }
-
-            // Advance to next chunk
             buffer.position(chunkStart + chunkTotalSize)
         }
     }
 
     private fun parseStringPool(buffer: ByteBuffer, chunkStart: Int, headerSize: Int, totalSize: Int) {
-        buffer.position(chunkStart + 8) // Skip chunk header
+        buffer.position(chunkStart + 8)
         val stringCount = buffer.getInt()
         val styleCount = buffer.getInt()
         val flags = buffer.getInt()
@@ -85,71 +78,42 @@ class BinaryXmlParser(private val data: ByteArray) {
         val stylesStart = buffer.getInt()
 
         val absStringsStart = chunkStart + stringsStart
-
-        // Safety check for counts
-        if (stringCount < 0 || stringCount > 1000000) return // Sanity limit
+        if (stringCount < 0 || stringCount > 1000000) return
 
         val offsets = IntArray(stringCount)
-        for (i in 0 until stringCount) {
-            offsets[i] = buffer.getInt()
-        }
+        for (i in 0 until stringCount) offsets[i] = buffer.getInt()
 
         val isUtf8 = (flags and 0x100) != 0
 
         for (i in 0 until stringCount) {
             val offset = offsets[i]
             val stringPos = absStringsStart + offset
-
-            if (stringPos >= buffer.limit()) {
-                strings.add("")
-                continue
-            }
-
+            if (stringPos >= buffer.limit()) { strings.add(""); continue }
             buffer.position(stringPos)
 
             if (isUtf8) {
-                // Decode UTF-8 Lengths
-                // 1. Character length
                 var charLen = buffer.get().toInt() and 0xFF
-                if ((charLen and 0x80) != 0) {
-                    buffer.get() // Skip 2nd byte of char length
-                }
-
-                // 2. Byte length
+                if ((charLen and 0x80) != 0) buffer.get()
                 var byteLen = buffer.get().toInt() and 0xFF
                 if ((byteLen and 0x80) != 0) {
                     val next = buffer.get().toInt() and 0xFF
                     byteLen = ((byteLen and 0x7F) shl 8) or next
                 }
-
-                if (buffer.position() + byteLen > buffer.limit()) {
-                    strings.add("")
-                    continue
-                }
-
+                if (buffer.position() + byteLen > buffer.limit()) { strings.add(""); continue }
                 val charBytes = ByteArray(byteLen)
                 buffer.get(charBytes)
-                val str = String(charBytes, Charsets.UTF_8)
-                strings.add(str)
+                strings.add(String(charBytes, Charsets.UTF_8))
             } else {
-                // Decode UTF-16 Lengths
-                // 1. Length in characters (2 bytes)
                 var len = buffer.getShort().toInt() and 0xFFFF
                 if ((len and 0x8000) != 0) {
-                     val low = buffer.getShort().toInt() and 0xFFFF
-                     len = ((len and 0x7FFF) shl 16) or low
+                    val low = buffer.getShort().toInt() and 0xFFFF
+                    len = ((len and 0x7FFF) shl 16) or low
                 }
-
                 val byteLen = len * 2
-                 if (buffer.position() + byteLen > buffer.limit()) {
-                    strings.add("")
-                    continue
-                }
-
+                if (buffer.position() + byteLen > buffer.limit()) { strings.add(""); continue }
                 val charBytes = ByteArray(byteLen)
                 buffer.get(charBytes)
-                val str = String(charBytes, Charsets.UTF_16LE)
-                strings.add(str)
+                strings.add(String(charBytes, Charsets.UTF_16LE))
             }
         }
     }
@@ -167,21 +131,16 @@ class BinaryXmlParser(private val data: ByteArray) {
         if (!isValid) return
         try {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-            if (buffer.remaining() < 8) return
-            buffer.position(8) // Skip file header
-
+            buffer.position(8)
             while (buffer.hasRemaining()) {
                 val chunkStart = buffer.position()
                 if (buffer.remaining() < 8) break
-
                 val chunkType = buffer.getShort().toInt() and 0xFFFF
-                val chunkHeaderSize = buffer.getShort().toInt() and 0xFFFF
+                val headerSize = buffer.getShort().toInt() and 0xFFFF
                 val size = buffer.getInt()
-
                 if (size < 8 || size > buffer.remaining() + 8) break
 
                 if (chunkType == CHUNK_XML_START_ELEMENT) {
-                    // Parse attributes
                     buffer.position(chunkStart + 8)
                     val nsIdx = buffer.getInt()
                     val nameIdx = buffer.getInt()
@@ -191,7 +150,6 @@ class BinaryXmlParser(private val data: ByteArray) {
 
                     val tagName = if (nameIdx >= 0 && nameIdx < strings.size) strings[nameIdx] else ""
                     val attributes = mutableListOf<Attribute>()
-
                     var attrOffset = chunkStart + attrStart
                     for (i in 0 until attrCount) {
                         buffer.position(attrOffset)
@@ -200,12 +158,9 @@ class BinaryXmlParser(private val data: ByteArray) {
                         val aVal = buffer.getInt()
                         val aTypedValueHeader = buffer.getInt()
                         val aData = buffer.getInt()
-
                         val aType = (aTypedValueHeader shr 24) and 0xFF
-
                         val attrName = if (aName >= 0 && aName < strings.size) strings[aName] else ""
                         val attrValue = if (aVal >= 0 && aVal < strings.size) strings[aVal] else null
-
                         attributes.add(Attribute(attrName, attrValue, aType, aData, aName, aVal))
                         attrOffset += attrSize
                     }
@@ -213,35 +168,23 @@ class BinaryXmlParser(private val data: ByteArray) {
                 }
                 buffer.position(chunkStart + size)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     fun rebuild(): ByteArray {
-        if (!isValid) return data // Return original if parsing failed
-
+        if (!isValid) return data
         try {
             val output = ByteArrayOutputStream()
-
             // Rebuild String Pool
-            // We always rebuild as UTF-16LE for simplicity and max compatibility with our writer logic
-            // Note: This changes the file format from UTF-8 to UTF-16 if it was UTF-8.
-            // We should ideally check original flags, but UTF-16 is safe standard for AXML.
             val stringBytes = strings.map { it.toByteArray(Charsets.UTF_16LE) }
             val offsets = IntArray(strings.size)
             var currentOffset = 0
             for (i in strings.indices) {
                 offsets[i] = currentOffset
-                // Length (2 bytes) + Data + Null (2 bytes)
-                // Note: We are using simple small-string encoding (len < 32768)
                 currentOffset += 2 + stringBytes[i].size + 2
             }
-
-            // Align strings block
             val stringsBlockPadding = if (currentOffset % 4 != 0) 4 - (currentOffset % 4) else 0
             val stringsBlockSize = currentOffset
-
             val headerSize = 28
             val offsetsSize = strings.size * 4
             val totalSize = headerSize + offsetsSize + stringsBlockSize + stringsBlockPadding
@@ -251,36 +194,26 @@ class BinaryXmlParser(private val data: ByteArray) {
             spHeader.putShort(28)
             spHeader.putInt(totalSize)
             spHeader.putInt(strings.size)
+            spHeader.putInt(0)
             spHeader.putInt(0) // styles
-            spHeader.putInt(0) // flags (0 = UTF-16)
-            spHeader.putInt(28 + offsetsSize) // strings start
-            spHeader.putInt(0) // styles start
-
+            spHeader.putInt(0x0000) // flags = 0 for UTF-16
+            spHeader.putInt(28 + offsetsSize)
+            spHeader.putInt(0)
             for (off in offsets) spHeader.putInt(off)
 
-            // Buffer for chunks (Header + Strings + OtherChunks)
             val chunksBuffer = ByteArrayOutputStream()
             chunksBuffer.write(spHeader.array())
-
-            // Write strings data
             val strDataBuffer = ByteBuffer.allocate(stringsBlockSize + stringsBlockPadding).order(ByteOrder.LITTLE_ENDIAN)
             for (b in stringBytes) {
-                // Write length (char count = byte count / 2 for UTF-16)
                 strDataBuffer.putShort((b.size / 2).toShort())
                 strDataBuffer.put(b)
                 strDataBuffer.putShort(0)
             }
             chunksBuffer.write(strDataBuffer.array())
-
-            // Write other chunks
             for (c in otherChunks) chunksBuffer.write(c)
-
             val allChunks = chunksBuffer.toByteArray()
-
-            // Update File Size in Main Header
             val fileHeader = ByteBuffer.wrap(originalHeader.copyOf()).order(ByteOrder.LITTLE_ENDIAN)
             fileHeader.putInt(4, 8 + allChunks.size)
-
             val finalOutput = ByteArrayOutputStream()
             finalOutput.write(fileHeader.array())
             finalOutput.write(allChunks)
@@ -292,20 +225,19 @@ class BinaryXmlParser(private val data: ByteArray) {
     }
 
     fun decode(): String {
-        if (!isValid) return "Error: XML Parser failed to initialize. File might be corrupted or obfuscated."
-
-        try {
-            val sb = StringBuilder()
-            traverse { name, attrs ->
-                sb.append("<$name")
-                attrs.forEach { a ->
-                    sb.append(" ${a.name}=\"${a.value ?: a.data}\"")
+        if (!isValid) return "Error: XML Parser failed"
+        val sb = StringBuilder()
+        traverse { name, attrs ->
+            sb.append("<$name")
+            attrs.forEach { a ->
+                if (a.value != null) {
+                    sb.append(" ${a.name}=\"${a.value}\"")
+                } else {
+                    sb.append(" ${a.name}=\"@0x${Integer.toHexString(a.data)}\"")
                 }
-                sb.append(">\n")
             }
-            return sb.toString()
-        } catch (e: Exception) {
-            return "Error decoding XML: ${e.message}"
+            sb.append(">\n")
         }
+        return sb.toString()
     }
 }

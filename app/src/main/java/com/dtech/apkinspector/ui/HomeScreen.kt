@@ -5,7 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -13,8 +13,20 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun HomeScreen(
     onPickFile: () -> Unit,
-    onAppSelected: (String) -> Unit
+    onAppSelected: (java.io.File) -> Unit
 ) {
+    var showAppDialog by remember { mutableStateOf(false) }
+
+    if (showAppDialog) {
+        InstalledAppsDialog(
+            onDismiss = { showAppDialog = false },
+            onAppSelected = { file ->
+                showAppDialog = false
+                onAppSelected(file)
+            }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -42,12 +54,12 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         OutlinedButton(
-            onClick = { /* TODO: Implement App Picker Dialog */ },
+            onClick = { showAppDialog = true },
             modifier = Modifier.fillMaxWidth().height(60.dp)
         ) {
             Icon(Icons.Default.Android, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Select Installed App (Coming Soon)")
+            Text("Select Installed App")
         }
 
         Spacer(modifier = Modifier.height(32.dp))

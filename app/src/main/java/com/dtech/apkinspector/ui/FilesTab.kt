@@ -18,6 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.dtech.apkinspector.data.ApkFileNode
 import com.dtech.apkinspector.data.BinaryXmlParser
 import com.dtech.apkinspector.analyzer.DexAnalyzer
@@ -158,6 +161,7 @@ fun FileEditor(
     val isText = isTextFile(node.path)
     val isXml = node.path.endsWith(".xml", ignoreCase = true)
     val isDex = node.path.endsWith(".dex", ignoreCase = true)
+    val isImage = isImageFile(node.path)
 
     // Attempt to detect if XML is binary
     val isBinaryXml = remember(initialContent) {
@@ -170,12 +174,39 @@ fun FileEditor(
         } else false
     }
 
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        // This part needs a way to read bytes from Uri, but Composable context makes it tricky without ViewModel.
+        // For simplicity, we assume we can't easily read bytes here without passing a callback up or using context.
+        // However, we can ask user to pick, but we need to read it.
+    }
+    // To properly implement replacement, we need context
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+         if (uri != null) {
+             try {
+                 context.contentResolver.openInputStream(uri)?.use {
+                     onSave(it.readBytes())
+                 }
+             } catch (e: Exception) {
+                 e.printStackTrace()
+             }
+         }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(node.path.substringAfterLast('/')) },
             navigationIcon = {
                 IconButton(onClick = onClose) {
                     Icon(Icons.Default.ArrowBack, "Back")
+                }
+            },
+            actions = {
+                if (isImage) {
+                    IconButton(onClick = { launcher.launch("image/*") }) {
+                        Icon(Icons.Default.Save, "Replace") // Reuse Save icon for Replace
+                    }
                 }
             }
         )
@@ -185,21 +216,17 @@ fun FileEditor(
                 Text("Error loading content")
             }
         } else if (isDex) {
-            DexViewer(initialContent)
+            DexViewer(initialContent, onSave)
+        } else if (isImage) {
+             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                 AsyncImage(
+                     model = initialContent,
+                     contentDescription = "Image content",
+                     modifier = Modifier.fillMaxSize()
+                 )
+             }
         } else if (isBinaryXml) {
-            // Decoded XML View (Read Only)
-            val parser = remember(initialContent) { BinaryXmlParser(initialContent) }
-            val decoded = remember(initialContent) { parser.decode() }
-
-            Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(rememberScrollState())) {
-                Text(
-                    if (parser.isValid) "Binary XML (Read-Only)" else "Binary XML (Invalid/Obfuscated)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if(parser.isValid) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
-                )
-                HorizontalDivider()
-                Text(decoded, fontFamily = FontFamily.Monospace)
-            }
+            XmlEditor(initialContent, onSave)
         } else if (isText) {
             TextEditor(String(initialContent), onSave)
         } else {
@@ -235,17 +262,84 @@ fun TextEditor(initialText: String, onSave: (ByteArray) -> Unit) {
 }
 
 @Composable
-fun DexViewer(bytes: ByteArray) {
+fun DexViewer(bytes: ByteArray, onSave: ((ByteArray) -> Unit)? = null) {
     val info = remember(bytes) { DexAnalyzer.analyzeDexBytes(bytes) }
+    var editMode by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
 
-    Column(modifier = Modifier.padding(16.dp)) {
-        Text("DEX Info", style = MaterialTheme.typography.headlineSmall)
-        Text("Strings: ${info.strings}")
+    // We only support replacing specific strings.
+    // State to hold pending replacements: Map<Original, New>
+    val replacements = remember { mutableStateMapOf<String, String>() }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+             Text("DEX Info: ${info.classes} Classes", style = MaterialTheme.typography.titleMedium)
+             if (onSave != null) {
+                 Row {
+                    FilterChip(
+                        selected = editMode,
+                        onClick = { editMode = !editMode },
+                        label = { Text(if(editMode) "Done Editing" else "Edit Strings") }
+                    )
+                    if (editMode && replacements.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                             val newBytes = DexAnalyzer.replaceStrings(bytes, replacements)
+                             onSave(newBytes)
+                             editMode = false
+                             replacements.clear()
+                        }) {
+                            Text("Save")
+                        }
+                    }
+                 }
+             }
+        }
+
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        if (editMode) {
+             OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                label = { Text("Search Strings") },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            )
+        }
+
         LazyColumn {
-            items(info.extractedStrings) { str ->
-                Text(str, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                HorizontalDivider(color = Color.DarkGray, thickness = 0.5.dp)
+            val filtered = if (searchQuery.isNotEmpty()) {
+                info.extractedStrings.filter { it.contains(searchQuery, true) }
+            } else {
+                info.extractedStrings
+            }
+
+            items(filtered) { str ->
+                if (editMode) {
+                    var pendingVal by remember(str) { mutableStateOf(replacements[str] ?: str) }
+                    OutlinedTextField(
+                        value = pendingVal,
+                        onValueChange = { newVal ->
+                            if (newVal.length <= str.length) {
+                                pendingVal = newVal
+                                if (newVal != str) {
+                                    replacements[str] = newVal
+                                } else {
+                                    replacements.remove(str)
+                                }
+                            }
+                        },
+                        label = { Text("Max len: ${str.length}") },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    )
+                } else {
+                    Text(str, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    HorizontalDivider(color = Color.DarkGray, thickness = 0.5.dp)
+                }
             }
         }
     }
@@ -256,4 +350,10 @@ fun isTextFile(path: String): Boolean {
     return lower.endsWith(".txt") || lower.endsWith(".xml") || lower.endsWith(".json") ||
            lower.endsWith(".html") || lower.endsWith(".properties") || lower.endsWith(".js") ||
            lower.endsWith(".css") || lower.endsWith(".svg") || lower.endsWith(".yaml") || lower.endsWith(".yml")
+}
+
+fun isImageFile(path: String): Boolean {
+    val lower = path.lowercase()
+    return lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
+           lower.endsWith(".webp") || lower.endsWith(".gif") || lower.endsWith(".bmp")
 }

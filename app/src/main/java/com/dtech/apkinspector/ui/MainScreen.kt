@@ -77,11 +77,10 @@ fun MainScreen(
             }
 
             if (state.apkUri == null) {
-                Button(onClick = { picker.launch(arrayOf("application/vnd.android.package-archive")) }) {
-                    Icon(Icons.Default.Add, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("OPEN APK")
-                }
+                HomeScreen(
+                    onPickFile = { picker.launch(arrayOf("application/vnd.android.package-archive")) },
+                    onAppSelected = { file -> viewModel.loadApkFromFile(file) }
+                )
             } else {
                 if (state.isProcessing) {
                     CircularProgressIndicator()
